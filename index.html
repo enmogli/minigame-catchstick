@@ -1,0 +1,468 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+
+// --- Web Audio API for Sound Effects ---
+let sharedAudioCtx = null;
+const getAudioCtx = () => {
+  try {
+    if (!sharedAudioCtx) {
+      sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume();
+    return sharedAudioCtx;
+  } catch (e) {
+    return null;
+  }
+};
+
+const playTone = (freq, type, duration, vol=0.1, sweepDown=false) => {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    if (sweepDown) {
+      osc.frequency.exponentialRampToValueAtTime(freq / 2, ctx.currentTime + duration);
+    }
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+    osc.stop(ctx.currentTime + duration);
+  } catch (e) {
+    console.warn("Audio play failed:", e);
+  }
+};
+
+const playDropSound = () => playTone(800, 'sine', 0.1, 0.05, true);
+const playCatchSound = () => playTone(1200, 'triangle', 0.15, 0.1);
+const playMissSound = () => playTone(150, 'sawtooth', 0.2, 0.1, true);
+
+const playWinChord = () => {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    
+    const playOsc = (freq, type, startTime) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startTime);
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(0.2, startTime + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.01, startTime + 2.0);
+      osc.stop(startTime + 2.0);
+    };
+
+    const t = ctx.currentTime;
+    // C Major 7th Chord
+    playOsc(261.63, 'sine', t);       // C4
+    playOsc(329.63, 'triangle', t);   // E4
+    playOsc(392.00, 'sine', t);       // G4
+    playOsc(493.88, 'triangle', t);   // B4
+    playOsc(523.25, 'sine', t + 0.1); // C5 (Arpeggiated slightly)
+  } catch (e) {
+    console.warn("Audio play failed:", e);
+  }
+};
+
+// --- Components ---
+
+const StartScreen = ({ onStart }) => (
+  <div className="flex flex-col items-center justify-center h-full space-y-8 bg-slate-900 text-white p-6 rounded-xl shadow-2xl">
+    <div className="text-center">
+      <h1 className="text-5xl font-black mb-4 tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">
+        極限落棒反應測試
+      </h1>
+      <p className="text-lg text-slate-300 max-w-md mx-auto leading-relaxed">
+        機器上懸掛著 5 根直棒，它們將隨機掉落。<br/>
+        滑鼠將化為你的手掌，當棒子落下時，迅速將手移過去並<strong className="text-cyan-400">按下左鍵（或點擊螢幕）</strong>抓取！
+      </p>
+    </div>
+    <div className="flex gap-4 items-center bg-slate-800 p-4 rounded-lg border border-slate-700">
+      <div className="text-4xl">🖐️</div>
+      <div className="text-slate-400">➡️</div>
+      <div className="text-4xl">✊</div>
+      <div className="ml-2 text-sm text-slate-400">點擊左鍵/觸控螢幕抓握</div>
+    </div>
+    <button
+      onClick={onStart}
+      className="px-10 py-4 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold rounded-full text-xl shadow-[0_0_20px_rgba(6,182,212,0.5)] transition-all transform hover:scale-105 active:scale-95"
+    >
+      開始測試
+    </button>
+  </div>
+);
+
+const ResultScreen = ({ results, onRestart, leaderboard }) => {
+  const caughtSticks = results.filter(r => r.caught);
+  const caughtCount = caughtSticks.length;
+  const avgTime = caughtCount > 0 
+    ? (caughtSticks.reduce((acc, curr) => acc + curr.reactionTime, 0) / caughtCount).toFixed(2) 
+    : 0;
+
+  useEffect(() => {
+    if (caughtCount === 5) {
+      playWinChord();
+    }
+  }, [caughtCount]);
+
+  let message = "";
+  if (caughtCount === 5) {
+    message = "神速大俠，你真厲害！";
+  } else if (caughtCount > 0) {
+    message = `這次抓到了 ${caughtCount} 根`;
+  } else {
+    message = "太快了嗎，再一次吧！";
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full space-y-6 bg-slate-900 text-white p-6 rounded-xl w-full max-w-4xl mx-auto overflow-y-auto">
+      <h2 className="text-4xl font-bold text-cyan-400 mb-2">測試結算</h2>
+      
+      <div className="text-2xl font-semibold text-center bg-slate-800 px-8 py-4 rounded-xl border border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.2)]">
+        {message}
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 w-full mt-6">
+        {results.map((result, idx) => (
+          <div key={idx} className={`p-4 rounded-lg flex flex-col items-center border ${result.caught ? 'bg-green-900/40 border-green-500/50' : 'bg-red-900/40 border-red-500/50'}`}>
+            <span className="text-sm text-slate-400 mb-1">棒子 {idx + 1}</span>
+            {result.caught ? (
+              <>
+                <span className="text-2xl mb-1">✅</span>
+                <span className="font-mono font-bold text-green-400">{result.reactionTime.toFixed(0)} ms</span>
+              </>
+            ) : (
+              <>
+                <span className="text-2xl mb-1">❌</span>
+                <span className="font-mono text-red-400">Miss</span>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-8 w-full mt-6">
+        <div className="flex-1 bg-slate-800 p-6 rounded-xl border border-slate-700 flex flex-col items-center justify-center">
+          <span className="text-slate-400 mb-2">平均反應時間</span>
+          <span className="text-5xl font-black font-mono text-cyan-400">{avgTime} <span className="text-xl">ms</span></span>
+        </div>
+
+        <div className="flex-1 bg-slate-800 p-6 rounded-xl border border-slate-700">
+          <h3 className="text-xl font-bold text-slate-200 mb-4 flex items-center gap-2">
+            🏆 英雄榜 (Leaderboard)
+          </h3>
+          <div className="space-y-2">
+            {leaderboard.length === 0 ? (
+              <p className="text-slate-500 text-sm">暫無紀錄</p>
+            ) : (
+              leaderboard.map((entry, idx) => (
+                <div key={idx} className="flex justify-between items-center bg-slate-900 p-3 rounded text-sm">
+                  <span className="text-slate-300 font-bold">
+                    {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `${idx+1}.`} 
+                    <span className="ml-2">玩家</span>
+                  </span>
+                  <div className="flex gap-4">
+                    <span className="text-green-400">抓取: {entry.score}/5</span>
+                    <span className="text-cyan-400 font-mono">{entry.avgTime > 0 ? `${entry.avgTime}ms` : '---'}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={onRestart}
+        className="mt-8 px-8 py-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-lg transition-colors"
+      >
+        再試一次
+      </button>
+    </div>
+  );
+};
+
+const GameScreen = ({ onGameOver }) => {
+  const containerRef = useRef(null);
+  const handRef = useRef(null);
+  const sticksRef = useRef([]);
+  const requestRef = useRef();
+  
+  // Game constants
+  const STICK_WIDTH = 24;
+  const STICK_HEIGHT = 200;
+  const HAND_SIZE = 80; // Increased size for better touch optimization
+  const GRAVITY = 1500; // pixels per second squared
+
+  // Game state mutable refs (for performance in animation frame)
+  const gameState = useRef({
+    status: 'PLAYING',
+    mouse: { x: -100, y: -100, isDown: false },
+    sticks: Array.from({ length: 5 }).map((_, i) => ({
+      id: i,
+      x: 0, // Set later based on screen width
+      y: 80, // Hanging height
+      status: 'waiting', // waiting, falling, caught, missed
+      dropStartTime: 0,
+      reactionTime: 0,
+      delay: Math.random() * 4000 + 1000, // 1s to 5s delay
+      element: null
+    }))
+  });
+
+  // Initialize game layout
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const { width } = containerRef.current.getBoundingClientRect();
+    const spacing = width / 6;
+    
+    gameState.current.sticks.forEach((stick, i) => {
+      stick.x = spacing * (i + 1) - (STICK_WIDTH / 2);
+    });
+  }, []);
+
+  // Main game loop
+  const updateGame = useCallback(() => {
+    if (gameState.current.status !== 'PLAYING') return;
+
+    const now = performance.now();
+    const state = gameState.current;
+    let allFinished = true;
+
+    // Update hand cursor position
+    if (handRef.current) {
+      handRef.current.style.transform = `translate(${state.mouse.x}px, ${state.mouse.y}px)`;
+      handRef.current.textContent = state.mouse.isDown ? '✊' : '🖐️';
+    }
+
+    state.sticks.forEach(stick => {
+      // Logic for waiting sticks
+      if (stick.status === 'waiting') {
+        allFinished = false;
+        if (!stick.activationTime) {
+          stick.activationTime = now + stick.delay;
+        } else if (now >= stick.activationTime) {
+          stick.status = 'falling';
+          stick.dropStartTime = now;
+          playDropSound(); // Play sound on drop
+        }
+      } 
+      // Logic for falling sticks
+      else if (stick.status === 'falling') {
+        allFinished = false;
+        const timeElapsed = (now - stick.dropStartTime) / 1000; // in seconds
+        
+        // s = ut + 0.5 * a * t^2
+        const dropDistance = 0.5 * GRAVITY * (timeElapsed ** 2);
+        stick.y = 80 + dropDistance;
+
+        // Check bounds (missed)
+        if (stick.y > window.innerHeight) {
+          stick.status = 'missed';
+          playMissSound(); // Play sound on miss
+        }
+
+        // Check collision if mouse is down
+        if (state.mouse.isDown) {
+          // Calculate centers for simpler collision or use AABB
+          const handX = state.mouse.x;
+          const handY = state.mouse.y;
+          
+          // AABB Collision (Axis-Aligned Bounding Box)
+          // Hand Box (adjust offset to center emoji)
+          const hBox = { x: handX - HAND_SIZE/2, y: handY - HAND_SIZE/2, w: HAND_SIZE, h: HAND_SIZE };
+          // Stick Box
+          const sBox = { x: stick.x, y: stick.y, w: STICK_WIDTH, h: STICK_HEIGHT };
+
+          if (
+            hBox.x < sBox.x + sBox.w &&
+            hBox.x + hBox.w > sBox.x &&
+            hBox.y < sBox.y + sBox.h &&
+            hBox.h + hBox.y > sBox.y
+          ) {
+            stick.status = 'caught';
+            stick.reactionTime = now - stick.dropStartTime;
+            playCatchSound(); // Play sound on catch
+          }
+        }
+      }
+
+      // Update DOM visually
+      if (stick.element) {
+        if (stick.status === 'waiting') {
+           stick.element.style.transform = `translate(${stick.x}px, ${stick.y}px)`;
+           stick.element.style.opacity = 1;
+           stick.element.className = "absolute top-0 left-0 rounded-full bg-gradient-to-b from-orange-400 to-amber-600 shadow-[0_0_10px_rgba(245,158,11,0.5)]";
+        } else if (stick.status === 'falling') {
+           stick.element.style.transform = `translate(${stick.x}px, ${stick.y}px)`;
+           // Add a slight motion blur effect class if needed
+        } else if (stick.status === 'caught') {
+           stick.element.style.transform = `translate(${stick.x}px, ${stick.y}px)`;
+           stick.element.className = "absolute top-0 left-0 rounded-full bg-gradient-to-b from-green-400 to-emerald-600 shadow-[0_0_20px_rgba(16,185,129,0.8)]";
+        } else if (stick.status === 'missed') {
+           stick.element.style.opacity = 0;
+        }
+      }
+    });
+
+    if (allFinished) {
+      state.status = 'GAMEOVER';
+      const results = state.sticks.map(s => ({
+        id: s.id,
+        caught: s.status === 'caught',
+        reactionTime: s.status === 'caught' ? s.reactionTime : 0
+      }));
+      setTimeout(() => onGameOver(results), 1000); // 1 sec delay before result screen
+    } else {
+      requestRef.current = requestAnimationFrame(updateGame);
+    }
+  }, [onGameOver]);
+
+  useEffect(() => {
+    requestRef.current = requestAnimationFrame(updateGame);
+    return () => cancelAnimationFrame(requestRef.current);
+  }, [updateGame]);
+
+  // Input Handlers
+  const handleMouseMove = (e) => {
+    // If not full window, adjust bounds, but here container is full
+    const rect = containerRef.current.getBoundingClientRect();
+    gameState.current.mouse.x = e.clientX - rect.left;
+    gameState.current.mouse.y = e.clientY - rect.top;
+  };
+
+  const handleMouseDown = () => {
+    getAudioCtx(); // Initialize audio context on first interaction
+    gameState.current.mouse.isDown = true;
+  };
+
+  const handleMouseUp = () => {
+    gameState.current.mouse.isDown = false;
+  };
+
+  const handleTouchStart = (e) => {
+    getAudioCtx(); // Initialize audio context on first touch
+    const rect = containerRef.current.getBoundingClientRect();
+    gameState.current.mouse.x = e.touches[0].clientX - rect.left;
+    gameState.current.mouse.y = e.touches[0].clientY - rect.top;
+    gameState.current.mouse.isDown = true;
+  };
+
+  const handleTouchMove = (e) => {
+    const rect = containerRef.current.getBoundingClientRect();
+    gameState.current.mouse.x = e.touches[0].clientX - rect.left;
+    gameState.current.mouse.y = e.touches[0].clientY - rect.top;
+  };
+
+  return (
+    <div 
+      ref={containerRef}
+      className="relative w-full h-full bg-slate-900 overflow-hidden cursor-none touch-none select-none"
+      onMouseMove={handleMouseMove}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleMouseUp}
+      onTouchCancel={handleMouseUp}
+    >
+      {/* Visual Machine Top */}
+      <div className="absolute top-0 left-0 w-full h-20 bg-slate-800 border-b-4 border-slate-700 shadow-2xl z-10 flex items-center justify-center">
+        <div className="text-slate-500 font-mono text-sm tracking-widest opacity-50">REACTION SYSTEM ACTIVE</div>
+        {/* Machine details */}
+        {gameState.current.sticks.map((s, i) => (
+          <div key={`mount-${i}`} className="absolute top-16 w-8 h-4 bg-slate-600 rounded-b" style={{ left: s.x - 4 }} />
+        ))}
+      </div>
+
+      {/* Sticks */}
+      {gameState.current.sticks.map((stick) => (
+        <div
+          key={stick.id}
+          ref={el => stick.element = el}
+          className="absolute top-0 left-0 rounded-full bg-gradient-to-b from-orange-400 to-amber-600 shadow-[0_0_10px_rgba(245,158,11,0.5)] transition-colors duration-200"
+          style={{ 
+            width: STICK_WIDTH, 
+            height: STICK_HEIGHT, 
+            transform: `translate(-100px, -100px)` // Initial off-screen
+          }}
+        />
+      ))}
+
+      {/* Hand Cursor */}
+      <div 
+        ref={handRef}
+        className="absolute top-0 left-0 pointer-events-none z-50 text-6xl drop-shadow-xl"
+        style={{ 
+          transform: `translate(-100px, -100px)`,
+          marginLeft: '-40px', // Center horizontally based on new HAND_SIZE
+          marginTop: '-40px',  // Center vertically based on new HAND_SIZE
+        }}
+      >
+        🖐️
+      </div>
+
+      {/* Overlay info */}
+      <div className="absolute bottom-4 left-0 w-full text-center pointer-events-none opacity-30 text-white font-mono text-sm px-4">
+        移動手掌至目標下方 • 按下左鍵/輕觸螢幕抓握
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  const [screen, setScreen] = useState('START'); // START, PLAY, RESULT
+  const [results, setResults] = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
+
+  const handleStart = () => {
+    setScreen('PLAY');
+  };
+
+  const handleGameOver = (gameResults) => {
+    setResults(gameResults);
+    
+    // Process leaderboard
+    const caughtCount = gameResults.filter(r => r.caught).length;
+    const avgTime = caughtCount > 0 
+      ? Math.round(gameResults.reduce((acc, curr) => acc + curr.reactionTime, 0) / caughtCount)
+      : 0;
+
+    const newRecord = {
+      score: caughtCount,
+      avgTime: avgTime,
+      date: new Date().toISOString()
+    };
+
+    setLeaderboard(prev => {
+      const updated = [...prev, newRecord];
+      // Sort: highest score first, then lowest average time
+      updated.sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        if (a.score === 0 && b.score === 0) return 0; // Both 0 score, order doesn't matter much
+        return a.avgTime - b.avgTime;
+      });
+      return updated.slice(0, 5); // Keep top 5
+    });
+
+    setScreen('RESULT');
+  };
+
+  return (
+    <div className="w-full h-screen bg-black font-sans">
+      {screen === 'START' && <StartScreen onStart={handleStart} />}
+      {screen === 'PLAY' && <GameScreen onGameOver={handleGameOver} />}
+      {screen === 'RESULT' && <ResultScreen results={results} onRestart={handleStart} leaderboard={leaderboard} />}
+    </div>
+  );
+}
